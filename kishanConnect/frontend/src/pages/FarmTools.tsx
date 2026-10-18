@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 
-const API = import.meta.env.VITE_BACKEND_URL || "https://backend-smart-crop-360.onrender.com";
+const API = import.meta.env.VITE_BACKEND_URL || "http://localhost:5000";
 type Farm = { id: number; name: string; state: string; district: string; acres: number; soilType?: string; waterSource?: string; currentCrop?: string };
 type RecordItem = { id: number; kind: string; crop?: string; createdAt: string; result: Record<string, unknown> };
 type Scheme = { name: string; description: string; url: string };

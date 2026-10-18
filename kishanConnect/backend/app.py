@@ -620,6 +620,72 @@ def market_prices():
         return jsonify({'error': 'Official mandi data is temporarily unavailable. Please retry shortly.', 'source': 'AGMARKNET'}), 502
 
 
+def offline_farming_guidance(question):
+    """Provide limited, clearly labeled general advice when the live model is unreachable."""
+    text = question.casefold()
+    notice = "Offline farming guide (the live AI connection is unavailable). This is general guidance, not a live-data prediction.\n\n"
+    if 'karnataka' in text and any(word in text for word in ('crop', 'grow', 'suit', 'best', 'plant')):
+        return notice + (
+            "There is no single best crop for all of Karnataka: the state has ten agro-climatic zones. As a broad starting point, UAS Bengaluru lists ragi, maize, pulses, "
+            "groundnut and some horticulture for parts of the southern dry zones; jowar, cotton, pulses and oilseeds are common options in drier zones; rice and sugarcane "
+            "are more suited to locations with reliable water. Choose only after checking your district's zone, soil, rainfall, irrigation and current sowing calendar. "
+            "For a specific choice, share your district, soil type and whether the field is rainfed or irrigated. Source: UAS Bengaluru agro-climatic zones."
+        )
+    if any(word in text for word in ('increase', 'improve', 'higher', 'more')) and 'yield' in text:
+        return notice + (
+            "For a better chance of improving yield: (1) get a soil test and follow the crop- and zone-specific recommendation, (2) use locally recommended quality seed "
+            "and sow at the recommended time and spacing, (3) manage weeds early and protect moisture, (4) rotate with a suitable legume where practical, and "
+            "(5) scout regularly for pests and disease. Avoid extra fertilizer or pesticide without a soil report or confirmed need. The best steps depend on your crop and field; "
+            "share your crop, district, soil and irrigation situation for more focused advice."
+        )
+    if any(word in text for word in ('sell', 'market', 'price', 'mandi', 'onion', 'pyaz')):
+        return notice + (
+            "For onion sales in Maharashtra, compare same-day prices and arrivals at two or three nearby APMCs on the official AGMARKNET or e-NAM portal. "
+            "Compare the reported price after transport, commission, and handling costs; a higher distant-market quote may not mean higher net returns. "
+            "Sell well-cured, dry, sorted produce, and store only in a suitable ventilated onion store. I cannot see today's prices or predict tomorrow's market."
+        )
+    if any(word in text for word in ('disease', 'pest', 'curl', 'spot', 'yellow', 'wilt', 'insect')):
+        return notice + (
+            "I cannot diagnose a crop problem offline. Note which plant parts are affected, how quickly symptoms are spreading, and recent irrigation or spray history. "
+            "Photograph affected and healthy plants, and ask your local Krishi Vigyan Kendra or agriculture officer to confirm the cause before treatment. "
+            "Do not apply or mix pesticides based on a guess; follow the product label."
+        )
+    if any(word in text for word in ('fertilizer', 'fertiliser', 'urea', 'dose', 'dosage', 'nutrient')):
+        return notice + (
+            "Base fertilizer decisions on a recent soil test, the crop and growth stage, and your state agriculture recommendations. Avoid guessing a dose or mixing products. "
+            "Follow the product label and ask your local agriculture extension officer if the soil report or application rate is unclear."
+        )
+    if any(word in text for word in ('water', 'irrigat', 'rain', 'drought')):
+        return notice + (
+            "I cannot see your field moisture or local forecast. Check soil moisture near the active root zone and consider crop type, growth stage, soil texture, and recent rain before irrigating. "
+            "Avoid a fixed schedule when field conditions differ; seek local crop-specific advice for water-sensitive stages."
+        )
+    if any(word in text for word in ('crop', 'grow', 'sow', 'plant', 'seed', 'rotation', 'yield')):
+        return notice + (
+            "Choose crops and sowing dates using your soil test, reliable local water supply, current state agricultural calendar, and seed availability. "
+            "Rotate crop families where practical, use certified seed suited to your area, and confirm local variety and sowing-window advice with your Krishi Vigyan Kendra. "
+            "I cannot check current weather or guarantee yield offline."
+        )
+    if 'organic' in text:
+        return notice + (
+            "Start with a soil test and a gradual plan: recycle clean crop residues, use well-decomposed farmyard manure or compost, include suitable legumes in rotation, "
+            "and reduce avoidable soil disturbance. Keep records of inputs and check the applicable organic certification standard before selling produce as certified organic. "
+            "Do not assume an input is permitted without checking the relevant standard and label."
+        )
+    return notice + (
+        "I can provide only basic general guidance while the AI connection is unavailable. For advice specific to your crop and field, include the crop, growth stage, "
+        "district, soil type, and what you observed, then retry when the live AI connection is restored."
+    )
+
+
+def offline_assistant_response(messages, status, provider_http_status=None):
+    latest_question = str(messages[-1].get('content', '')) if messages else ''
+    result = {'reply': offline_farming_guidance(latest_question), 'source': 'offline_guide', 'status': status}
+    if provider_http_status is not None:
+        result['providerHttpStatus'] = provider_http_status
+    return jsonify(result), 200
+
+
 @app.route('/api/ai-assistant', methods=['POST'])
 @require_user
 def ai_assistant(user):
@@ -656,7 +722,7 @@ def ai_assistant(user):
         elif farm_context is not None:
             return jsonify({'error': 'Farm context must be an owned farm or null.'}), 400
         if not GEMINI_API_KEY:
-            return jsonify({'error': 'AI assistant is not configured. Add GEMINI_API_KEY to backend/.env.', 'status': 'provider_unconfigured'}), 503
+            return offline_assistant_response(messages, 'provider_unconfigured')
         system_prompt += ("\n\nAccuracy and safety requirements: Never invent live mandi prices, official scheme eligibility, "
                           "disease diagnoses, model confidence, or sensor readings. For chemical inputs, do not guess "
                           "dosages; direct the farmer to the product label and a local agricultural extension officer. "
@@ -693,19 +759,20 @@ def ai_assistant(user):
                 message = 'Gemini is temporarily unavailable. Please retry shortly.'
             else:
                 message = 'Gemini rejected the request. Check the model configuration and API project settings.'
-            return jsonify({'error': message, 'status': 'provider_error'}), 502
+            app.logger.warning("Gemini fallback enabled for HTTP %s", response.status_code)
+            return offline_assistant_response(messages, 'provider_error', response.status_code)
         try:
             result = response.json()
         except ValueError:
             app.logger.warning("Gemini returned a non-JSON response")
-            return jsonify({'error': 'Gemini returned an unreadable response. Please retry shortly.', 'status': 'provider_error'}), 502
+            return offline_assistant_response(messages, 'invalid_provider_response')
 
         candidates = result.get("candidates") or []
         if candidates:
             parts = candidates[0].get("content", {}).get("parts", [])
             reply = "\n".join(part.get("text", "") for part in parts if part.get("text")).strip()
             if not reply:
-                return jsonify({'error': 'Gemini could not produce a text answer for that question. Please rephrase and try again.', 'status': 'empty_response'}), 502
+                return offline_assistant_response(messages, 'empty_provider_response')
             latest_question = str(messages[-1].get('content', ''))[:2000]
             record = FarmRecord(owner_id=user.id, farm_id=selected_farm.id if selected_farm else None, kind='assistant-chat',
                                 payload=json.dumps({'question': latest_question, 'reply': reply[:8000]}, ensure_ascii=False))
@@ -719,11 +786,11 @@ def ai_assistant(user):
 
     except requests.Timeout:
         app.logger.warning('Gemini request timed out')
-        return jsonify({'error': 'Gemini took too long to respond. Please retry shortly.', 'status': 'provider_timeout'}), 504
+        return offline_assistant_response(messages, 'provider_timeout')
     except requests.RequestException as error:
         # Do not log the request URL or exception text: provider URLs/headers can contain credentials.
         app.logger.warning('Gemini connection failed (%s)', type(error).__name__)
-        return jsonify({'error': 'Cannot reach Gemini from the backend. Check outbound network access and retry.', 'status': 'provider_unreachable'}), 503
+        return offline_assistant_response(messages, 'provider_unreachable')
     except Exception as error:
         app.logger.error('AI assistant request failed (%s)', type(error).__name__)
         return jsonify({'error': 'The AI assistant encountered an internal error. Please retry.', 'status': 'internal_error'}), 500

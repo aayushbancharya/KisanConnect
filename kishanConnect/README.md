@@ -1,24 +1,33 @@
 # KisanConnect
 
-KisanConnect is a React and Flask farming assistant for Indian farmers. It includes a shared responsive SaaS navigation shell, farm dashboard, account-linked farm profiles, saved advisory history, safe irrigation and nutrient guidance, marketplace inquiries and replies, and links to official scheme portals. Recommendations and unavailable model states are labeled by their source and limitations.
+KisanConnect is a farming support website for Indian farmers. I built it with a React frontend and a Flask backend.
 
-## Technology
+The website includes:
 
-- Frontend: React, TypeScript, React Router, Vite, Tailwind CSS
-- Backend: Flask, Flask-SQLAlchemy, SQLite, Flask-Bcrypt, JWT
-- External providers: data.gov.in Agmarknet, Gemini, Open-Meteo, Nominatim
+- farmer registration and login
+- farm profiles and farm records
+- crop recommendations
+- disease image upload
+- weather information
+- irrigation and fertilizer guidance
+- market prices
+- farmer marketplace and inquiries
+- government scheme links
+- AI farming assistant
 
-## Run locally
+## Tech used
 
-Requirements: Node.js 20.19+ (Vite 8), Python 3.9+, npm, and pip.
+- React, TypeScript, React Router, Vite and Tailwind CSS
+- Flask, SQLAlchemy, SQLite, Flask-Bcrypt and JWT
+- Open-Meteo and Nominatim for weather and location data
+- Gemini for the AI assistant when an API key is configured
+- data.gov.in / Agmarknet for market prices when an API key is configured
 
-```sh
-cd frontend
-npm ci
-npm run dev
-```
+## Run the project locally
 
-The local `frontend/.env.local` points the frontend at `http://localhost:5000`. Copy `backend/.env.example` to `backend/.env`, then install and start the API:
+You need Node.js, npm, Python 3.9 or newer, and pip.
+
+Start the backend:
 
 ```sh
 cd backend
@@ -28,42 +37,38 @@ pip install -r requirements.txt
 python app.py
 ```
 
-The frontend is served at `http://localhost:5173` (Vite may choose the next available port). The backend is at `http://localhost:5000`.
-
-For production, set a stable, randomly generated `SECRET_KEY`; do not rely on the development fallback. Set `DATABASE_URL` to a persistent database URL if SQLite's local file is not suitable. Set `GEMINI_API_KEY` to enable AI chat and `AGMARKNET_API_KEY` to enable official mandi data. Keys belong in backend environment configuration, never in frontend variables. Weather uses Open-Meteo and reverse geocoding uses Nominatim from the browser.
-
-## Data and feature status
-
-Farm profiles and farm-tool records are stored in the configured SQLAlchemy database and scoped to the signed-in account. Existing user and marketplace data remain in the existing database. The new tables are created additively on application startup.
-
-| Feature | Current behavior | Status / dependency |
-|---|---|---|
-| Crop recommendations | Guided criteria workflow, farm prefill, persisted rules-based backend advice, and selected crop saving | Not a validated ML model; the guide does not estimate yield or profitability |
-| Disease detection | Image upload validates type/size and reports the inference provider response honestly | Diagnosis is unavailable until a genuine model or inference provider is configured; no disease result is persisted |
-| Weather | Open-Meteo current conditions and five-day forecast, including rainfall probability when supplied | External browser request; geolocation or profile-location lookup and provider network access are required |
-| Irrigation | Saves rules-based advice against the selected account-owned farm | Rain and temperature are entered by the user; there is no connected sensor or automatic forecast handoff |
-| Market prices | Queries data.gov.in; results are shown only when the provider returns them | Requires `AGMARKNET_API_KEY`; the local provider check returned HTTP 502 and no live records |
-| Marketplace | Listings persist; owner-only deletion, stored buyer inquiries, farmer replies, and owner-private contact fields | Public listing feed omits seller phone numbers; listing editing and completed transactions are not implemented |
-| Fertilizer and pesticide advisor | Crop/observation-based general safety guidance is stored with farm context | Does not calculate a dosage or prescribe products; disease-result context is unavailable without inference |
-| Yield prediction | Saves an unavailable-model record without showing a made-up yield | Blocked until a validated model and local training data are supplied |
-| Government schemes | Searchable directory of official government portals | No eligibility engine, saved-scheme workflow, or application tracking; verify details at each official portal |
-| AI assistant | Gemini-backed text chat accepts selected-farm context and stores successful exchanges; browser speech features are supported when available | Requires `GEMINI_API_KEY`; provider behavior and speech support depend on the runtime environment |
-
-The selected farm is stored in browser state and reused by Farm Tools, crop results, and the assistant. Farm profiles and crop selections remain account-owned in the database. The application does not claim that a device sensor, disease classifier, trained yield model, live price feed, or scheme eligibility engine exists when it is not configured. Public marketplace responses omit contact numbers; owners can see contact details on their own listings, and buyers can contact sellers through authenticated inquiries.
-
-## Verification
-
-Frontend build:
+Start the frontend in another terminal:
 
 ```sh
-cd frontend && npm run build
+cd frontend
+npm ci
+npm run dev
 ```
 
-Backend API tests:
+The frontend normally runs at `http://localhost:5173` and the backend at `http://localhost:5000`.
+
+For local environment setup, copy `backend/.env.example` to `backend/.env`. Add a strong `SECRET_KEY` and add `GEMINI_API_KEY` or `AGMARKNET_API_KEY` only if those features are needed. Do not put private keys in frontend files.
+
+## Current status
+
+Most features are connected to the backend and save data for the signed-in farmer. Crop advice and irrigation guidance are rules-based. Disease detection and yield prediction need a real model or provider before they can give model-generated results. Weather and market data depend on the external providers being available.
+
+The application does not show made-up disease, yield, price, or scheme eligibility results. It shows an unavailable state when the required provider or model is not configured.
+
+## Check the project
+
+Build the frontend:
+
+```sh
+cd frontend
+npm run build
+```
+
+Run the backend tests:
 
 ```sh
 cd backend
-PYTHONPYCACHEPREFIX=/tmp/smartcrop-pycache ./.venv/bin/python -m unittest discover -s tests -v
+PYTHONPYCACHEPREFIX=/tmp/kisanconnect-pycache ./.venv/bin/python -m unittest discover -s tests -v
 ```
 
-The tests use a temporary SQLite database. They cover farm ownership and persistence, crop selection, advisory persistence and validation, unavailable model states, marketplace listing ownership, private contact fields, buyer inquiries and farmer replies, and official scheme links.
+The tests use a temporary SQLite database and cover account-owned farms, crop selections, advisory records, marketplace ownership, inquiries, replies, and unavailable provider states.

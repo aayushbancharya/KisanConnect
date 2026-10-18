@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 
-const API = import.meta.env.VITE_BACKEND_URL || "https://backend-smart-crop-360.onrender.com";
+const API = import.meta.env.VITE_BACKEND_URL || "http://localhost:5000";
 
 const crops = [
   "Rice","Wheat","Maize","Jowar","Bajra","Ragi","Barley","Oats",

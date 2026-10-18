@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "https://backend-smart-crop-360.onrender.com";
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "http://localhost:5000";
 function storedUser() { try { return JSON.parse(localStorage.getItem("user") || "{}"); } catch { return {}; } }
 
 const indianStates = [

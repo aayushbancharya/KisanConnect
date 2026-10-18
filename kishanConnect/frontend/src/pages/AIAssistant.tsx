@@ -31,6 +31,7 @@ interface Message {
   role: "user" | "assistant";
   content: string;
   time: string;
+  source?: string;
 }
 
 type SpeechResult = { isFinal: boolean; 0: { transcript: string } };
@@ -48,7 +49,7 @@ type Recognition = {
 };
 type SpeechWindow = Window & { SpeechRecognition?: new () => Recognition; webkitSpeechRecognition?: new () => Recognition };
 const speechLocale: Record<string, string> = { en: "en-IN", hi: "hi-IN", kn: "kn-IN", ta: "ta-IN", te: "te-IN", mr: "mr-IN", pa: "pa-IN", gu: "gu-IN", bn: "bn-IN", or: "or-IN", ml: "ml-IN", as: "as-IN" };
-const backendUrl = import.meta.env.VITE_BACKEND_URL || (import.meta.env.DEV ? "http://localhost:5000" : "https://backend-smart-crop-360.onrender.com");
+const backendUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:5000";
 
 export default function AIAssistant() {
   const [selectedLang, setSelectedLang] = useState(languages[0]);
@@ -221,22 +222,21 @@ STRICT RULES:
           languageCode: selectedLang.code,
           farmContext: farms.find((farm) => String(farm.id) === farmId) || null,
           messages: [
-            ...messages.map((m) => ({
-              role: m.role,
-              content: m.content,
-            })),
+            ...messages.map((m) => ({ role: m.role, content: m.content })),
             { role: "user", content: messageText },
           ],
         }),
       });
 
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "The assistant service could not answer.");
-      const reply = data.reply || "Sorry, I could not get a response. Please try again.";
+      const data = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(data?.error || `The assistant service could not answer (HTTP ${response.status}).`);
+      if (!data || typeof data.reply !== "string") throw new Error("The assistant returned an invalid response. Please retry.");
+      const reply = data.reply;
 
       const assistantMessage: Message = {
         role: "assistant",
         content: reply,
+        source: data.source,
         time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
       };
 
@@ -245,7 +245,9 @@ STRICT RULES:
     } catch (error) {
       const errorMessage: Message = {
         role: "assistant",
-        content: error instanceof Error ? error.message : "Could not connect to the farming assistant.",
+        content: error instanceof TypeError
+          ? `Could not connect to the KisanConnect backend at ${backendUrl}. Make sure the backend is running and try again.`
+          : error instanceof Error ? error.message : "Could not connect to the farming assistant.",
         time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
       };
       setMessages((prev) => [...prev, errorMessage]);
@@ -321,6 +323,7 @@ STRICT RULES:
                       <span className="text-xs text-gray-400">AI Assistant</span>
                     </div>
                   )}
+                  {msg.source === "offline_guide" && <span className="mb-1 text-[11px] text-amber-700">Offline general guidance · live AI unavailable</span>}
                   <div className={`px-4 py-3 rounded-2xl text-sm whitespace-pre-wrap ${
                     msg.role === "user"
                       ? "bg-green-600 text-white rounded-tr-sm"

@@ -48,7 +48,7 @@ interface MandiData {
   arrival_date: string;
 }
 
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "https://backend-smart-crop-360.onrender.com";
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "http://localhost:5000";
 
 export default function MarketPrices() {
   const navigate = useNavigate();
