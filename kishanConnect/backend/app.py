@@ -11,6 +11,7 @@ import json
 import secrets
 import math
 import threading
+import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import wraps
 from dotenv import load_dotenv
@@ -45,9 +46,12 @@ AGMARKNET_HEADERS = {
 
 def _first_value(record, *names, default=""):
     """Read a field from data.gov.in/AGMARKNET despite label/case differences."""
-    values = {str(key).strip().casefold().replace(" ", "_"): value for key, value in record.items()}
+    def normalise_key(key):
+        return re.sub(r"[^a-z0-9]+", "_", str(key).strip().casefold()).strip("_")
+
+    values = {normalise_key(key): value for key, value in record.items()}
     for name in names:
-        value = values.get(name.casefold().replace(" ", "_"))
+        value = values.get(normalise_key(name))
         if value not in (None, ""):
             return str(value).strip()
     return default
@@ -57,7 +61,7 @@ def _normalise_mandi_records(records, commodity, state):
     """Convert the varying official API field names into the frontend contract."""
     normalised = []
     for record in records or []:
-        modal = _first_value(record, "modal_price", "modal price", "modal", "price")
+        modal = _first_value(record, "modal_price", "modal price", "modal price rs quintal", "modal", "price")
         if not modal or not any(char.isdigit() for char in modal):
             continue
         normalised.append({
@@ -66,12 +70,26 @@ def _normalise_mandi_records(records, commodity, state):
             "market": _first_value(record, "market", "market_name", "mkt_name", "mandi", default="Not specified"),
             "commodity": _first_value(record, "commodity", "commodity_name", default=commodity),
             "variety": _first_value(record, "variety", "variety_name", default="Not specified"),
-            "min_price": _first_value(record, "min_price", "min price", "minimum_price", default="—"),
-            "max_price": _first_value(record, "max_price", "max price", "maximum_price", default="—"),
+            "min_price": _first_value(record, "min_price", "min price", "min price rs quintal", "minimum_price", default="—"),
+            "max_price": _first_value(record, "max_price", "max price", "max price rs quintal", "maximum_price", default="—"),
             "modal_price": modal,
             "arrival_date": _first_value(record, "arrival_date", "arrival date", "price_date", "date", default="Not specified"),
         })
     return normalised
+
+
+def _commodity_variants(commodity):
+    """Official feeds use several names for the same farmer-facing commodity."""
+    aliases = {
+        "rice": ["Rice", "Paddy"],
+        "sunflower": ["Sunflower", "Sunflower Seed", "Sunflower Seeds"],
+        "sugarcane": ["Sugarcane", "Sugar Cane"],
+        "chickpea": ["Chickpea", "Bengal Gram", "Gram"],
+        "pigeon pea": ["Pigeon Pea", "Arhar", "Tur"],
+        "black gram": ["Black Gram", "Urad"],
+        "green gram": ["Green Gram", "Moong"],
+    }
+    return aliases.get(commodity.strip().casefold(), [commodity.strip()])
 
 # User Model
 class User(db.Model):
@@ -507,23 +525,24 @@ def market_prices():
     # some regions, so fall through to AGMARKNET's own public market reports.
     if AGMARKNET_API_KEY:
         for resource_id in ("9ef84268-d588-465a-a308-a864a43d0070", "35985678-0d79-46b4-9ed6-6f13308a1d24"):
-            try:
-                response = requests.get(
-                    f"https://api.data.gov.in/resource/{resource_id}",
-                    params={"api-key": AGMARKNET_API_KEY, "format": "json", "filters[commodity]": commodity,
-                            "filters[state]": state, "limit": 20},
-                    timeout=(2, 2),
-                )
-                data = response.json()
-                records = _normalise_mandi_records(data.get("records", []), commodity.strip(), state.strip())
-                if response.ok and records:
-                    result = {"records": records[:20], "source": "data.gov.in", "live": True,
-                              "note": "Recent reported prices from the Government of India's open mandi data. Prices and reporting dates vary by market."}
-                    with _mandi_cache_lock:
-                        _mandi_cache[cache_key] = (time.time(), result)
-                    return jsonify(result)
-            except (requests.RequestException, ValueError):
-                continue
+            for commodity_variant in _commodity_variants(commodity):
+                try:
+                    response = requests.get(
+                        f"https://api.data.gov.in/resource/{resource_id}",
+                        params={"api-key": AGMARKNET_API_KEY, "format": "json", "filters[commodity]": commodity_variant,
+                                "filters[state]": state, "limit": 20},
+                        timeout=(2, 2),
+                    )
+                    data = response.json()
+                    records = _normalise_mandi_records(data.get("records", []), commodity.strip(), state.strip())
+                    if response.ok and records:
+                        result = {"records": records[:20], "source": "data.gov.in", "live": True,
+                                  "note": "Recent reported prices from the Government of India's open mandi data. Prices and reporting dates vary by market."}
+                        with _mandi_cache_lock:
+                            _mandi_cache[cache_key] = (time.time(), result)
+                        return jsonify(result)
+                except (requests.RequestException, ValueError):
+                    continue
 
     try:
         filters_response = requests.get(f"{AGMARKNET_BASE_URL}/daily-price-arrival/filters",
@@ -531,8 +550,9 @@ def market_prices():
         filters_response.raise_for_status()
         filters_payload = filters_response.json()
         filters_data = filters_payload.get("data", filters_payload)
+        commodity_names = {name.casefold() for name in _commodity_variants(commodity)}
         commodity_entry = next((item for item in filters_data.get("cmdt_data", [])
-                                if str(item.get("commodity", item.get("commodity_name", item.get("cmdt_name", "")))).casefold() == commodity.strip().casefold()), None)
+                                if str(item.get("commodity", item.get("commodity_name", item.get("cmdt_name", "")))).casefold() in commodity_names), None)
         state_entry = next((item for item in filters_data.get("state_data", [])
                            if str(item.get("state", item.get("state_name", item.get("st_name", "")))).casefold() == state.strip().casefold()), None)
         if not commodity_entry or not state_entry:
@@ -606,7 +626,17 @@ def ai_assistant(user):
     try:
         data = request.get_json(silent=True) or {}
         messages = data.get('messages', [])
-        system_prompt = str(data.get('system', ''))[:8000]
+        language_names = {'en': 'English', 'hi': 'Hindi', 'kn': 'Kannada', 'ta': 'Tamil', 'te': 'Telugu',
+                          'mr': 'Marathi', 'pa': 'Punjabi', 'gu': 'Gujarati', 'bn': 'Bengali', 'or': 'Odia',
+                          'ml': 'Malayalam', 'as': 'Assamese'}
+        language = language_names.get(str(data.get('languageCode', 'en')).lower(), 'English')
+        system_prompt = (f"You are KisanConnect, a practical agricultural assistant for farmers in India. "
+                         f"Always answer in {language}, using simple, concise language. Help with crop planning, "
+                         "farming practices, soil, irrigation, pests, symptoms, inputs, harvest, storage, and farm schemes. "
+                         "Do not claim to diagnose a photo or field condition. Do not invent live prices, weather, sensor data, "
+                         "scheme eligibility, or local facts. Never guess pesticide or fertilizer dosages; direct the farmer "
+                         "to the product label and a local agricultural extension officer. State uncertainty when relevant. "
+                         "For unrelated questions, briefly explain that you only assist with farming.")
         if not isinstance(messages, list) or not messages or len(messages) > 30:
             return jsonify({'error': 'Provide between 1 and 30 chat messages.'}), 400
         if any(not isinstance(msg, dict) or msg.get('role') not in ('user', 'assistant') or

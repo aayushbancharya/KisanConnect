@@ -33,11 +33,12 @@ interface Message {
   time: string;
 }
 
+type SpeechResult = { isFinal: boolean; 0: { transcript: string } };
 type Recognition = {
   lang: string;
   continuous: boolean;
   interimResults: boolean;
-  onresult: ((event: { resultIndex: number; results: ArrayLike<ArrayLike<{ transcript: string; isFinal?: boolean }>> }) => void) | null;
+  onresult: ((event: { resultIndex: number; results: ArrayLike<SpeechResult> }) => void) | null;
   onerror: ((event: { error: string }) => void) | null;
   onstart: (() => void) | null;
   onend: (() => void) | null;
@@ -47,7 +48,7 @@ type Recognition = {
 };
 type SpeechWindow = Window & { SpeechRecognition?: new () => Recognition; webkitSpeechRecognition?: new () => Recognition };
 const speechLocale: Record<string, string> = { en: "en-IN", hi: "hi-IN", kn: "kn-IN", ta: "ta-IN", te: "te-IN", mr: "mr-IN", pa: "pa-IN", gu: "gu-IN", bn: "bn-IN", or: "or-IN", ml: "ml-IN", as: "as-IN" };
-const backendUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:5000";
+const backendUrl = import.meta.env.VITE_BACKEND_URL || (import.meta.env.DEV ? "http://localhost:5000" : "https://backend-smart-crop-360.onrender.com");
 
 export default function AIAssistant() {
   const [selectedLang, setSelectedLang] = useState(languages[0]);
@@ -216,7 +217,7 @@ STRICT RULES:
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${localStorage.getItem("token") || ""}` },
         body: JSON.stringify({
-          system: getSystemPrompt(selectedLang.name),
+          system: getSystemPrompt(languageLabels[selectedLang.code] || "English"),
           languageCode: selectedLang.code,
           farmContext: farms.find((farm) => String(farm.id) === farmId) || null,
           messages: [
@@ -284,7 +285,7 @@ STRICT RULES:
                   selectedLang.code === lang.code
                     ? "bg-green-600 text-white border-green-600"
                     : "border-gray-200 text-gray-600 hover:border-green-400"}`}>
-                {lang.flag} {lang.name}
+                {languageLabels[lang.code] || lang.code}
               </button>
             ))}
           </div>
@@ -299,7 +300,7 @@ STRICT RULES:
             {suggestedQuestions.map((q, i) => (
             <button
                 key={i}
-                onClick={() => sendMessage(`Please answer in ${selectedLang.name}: ${q}`)}
+                onClick={() => sendMessage(selectedLang.code !== "en" ? `Please answer in ${languageLabels[selectedLang.code]}: ${q}` : q)}
                 className="px-3 py-1.5 bg-green-50 hover:bg-green-100 text-green-700 rounded-lg text-xs transition">
                 {q}
               </button>
@@ -350,17 +351,17 @@ STRICT RULES:
 
         {/* Input */}
         <div className="bg-white rounded-2xl shadow-sm p-3 flex items-center gap-3">
-          <button type="button" onClick={startVoiceInput} aria-label="Speak your question" className="rounded-xl bg-green-50 px-3 py-2.5 text-lg text-green-800 hover:bg-green-100">Voice input</button>
+          <button type="button" onClick={startVoiceInput} aria-pressed={listening} aria-label={listening ? "Stop voice input" : "Speak your question"} className={`rounded-xl px-3 py-2.5 text-sm font-medium ${listening ? "bg-red-100 text-red-800" : "bg-green-50 text-green-800 hover:bg-green-100"}`}>{listening ? "Stop listening" : "Voice input"}</button>
           <input
             type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && sendMessage(selectedLang.code !== "en" ? `Please answer in ${selectedLang.name}: ${input}` : input)}
-            placeholder={`Type your farming question in ${selectedLang.name}...`}
+            onKeyDown={(e) => e.key === "Enter" && sendMessage(selectedLang.code !== "en" ? `Please answer in ${languageLabels[selectedLang.code]}: ${input}` : input)}
+            placeholder={`Type your farming question in ${languageLabels[selectedLang.code] || "English"}...`}
             className="flex-1 border border-gray-300 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-400"
           />
           <button
-            onClick={() => sendMessage(selectedLang.code !== "en" ? `Please answer in ${selectedLang.name}: ${input}` : input)}
+            onClick={() => sendMessage(selectedLang.code !== "en" ? `Please answer in ${languageLabels[selectedLang.code]}: ${input}` : input)}
             disabled={!input.trim() || loading}
             className="bg-green-600 hover:bg-green-700 disabled:bg-gray-300 text-white px-4 py-2.5 rounded-xl text-sm font-medium transition">
             {loading ? "⏳" : "Send 📤"}
