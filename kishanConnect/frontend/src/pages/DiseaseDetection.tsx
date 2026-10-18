@@ -42,6 +42,7 @@ const spreadLevel = [
 
 type Treatment = { name: string; dosagePerLiter: string; dosagePerAcre: string; frequency: string; method: string };
 type DiseaseResult = { name: string; confidence: number; severity: string; cause: string; symptoms: string[]; chemical: Treatment; organic: Treatment };
+type ObservationResult = { label: string; message: string; crop: string; affectedPart: string; cropAge: string; spread: string; nextSteps: string[]; safety: string; recordId: number };
 
 export default function DiseaseDetection() {
   const navigate = useNavigate();
@@ -55,7 +56,7 @@ export default function DiseaseDetection() {
   const [treatment, setTreatment] = useState<"chemical" | "organic">("chemical");
   const [landSize, setLandSize] = useState("1");
   const [analyzing, setAnalyzing] = useState(false);
-  const [result, setResult] = useState<DiseaseResult | null>(null);
+  const [result, setResult] = useState<DiseaseResult | ObservationResult | null>(null);
   const [analysisError, setAnalysisError] = useState("");
 
   const handleImage = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -85,11 +86,12 @@ export default function DiseaseDetection() {
       const response = await fetch(`${API}/api/farm-tools/disease-analysis`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${localStorage.getItem("token") || ""}` },
-        body: JSON.stringify({ image, crop, affectedPart: affected, cropAge: age, spread }),
+        body: JSON.stringify({ farmId: Number(localStorage.getItem("activeFarmId")) || undefined, crop, affectedPart: affected, cropAge: age, spread }),
       });
-      const data = await response.json();
+      const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.error || "Disease analysis is unavailable.");
-      setResult(data as DiseaseResult);
+      setResult(data as ObservationResult);
+      setStep(2);
     } catch (error) {
       setAnalysisError(error instanceof Error ? error.message : "Could not connect to the analysis service.");
       setStep(2);
@@ -98,15 +100,10 @@ export default function DiseaseDetection() {
     }
   };
 
-  const getSeverityColor = (severity: string) => {
-    if (severity === "Severe") return "text-red-600 bg-red-50";
-    if (severity === "Moderate") return "text-orange-600 bg-orange-50";
-    return "text-yellow-600 bg-yellow-50";
-  };
-
   const filteredCrops = crops.filter((c) =>
     c.toLowerCase().includes(search.toLowerCase())
   );
+  const getSeverityColor = (severity: string) => severity === "Severe" ? "text-red-600 bg-red-50" : severity === "Moderate" ? "text-orange-600 bg-orange-50" : "text-yellow-600 bg-yellow-50";
 
   return (
     <div className="min-h-screen bg-gray-50 pb-20 md:pb-0">
@@ -119,8 +116,8 @@ export default function DiseaseDetection() {
         {step === 0 && (
           <div className="space-y-4">
             <div className="text-center mb-6">
-              <h2 className="text-2xl font-bold text-gray-800">Disease Detection</h2>
-              <p className="text-sm text-gray-500 mt-1">Take a clear photo of the sick plant part</p>
+              <h2 className="text-2xl font-bold text-gray-800">Plant health observation</h2>
+              <p className="text-sm text-gray-500 mt-1">Save field details and get safe next steps. This app does not diagnose photos.</p>
             </div>
 
             {/* Image Upload */}
@@ -283,7 +280,21 @@ export default function DiseaseDetection() {
             <button onClick={() => { setStep(0); setAnalysisError(""); }} className="mt-4 rounded-lg bg-amber-900 px-4 py-2 text-sm font-semibold text-white">Back to image and crop details</button>
           </div>
         )}
-        {step === 2 && result && (
+        {step === 2 && result && "nextSteps" in result && (
+          <div className="space-y-4">
+            <div className="text-center"><h2 className="text-2xl font-bold text-gray-800">Field observation saved</h2><p className="text-sm text-gray-500">Your report is linked to the selected farm.</p></div>
+            <div className="rounded-2xl bg-white p-6 shadow-sm">
+              <h3 className="text-lg font-bold text-gray-800">{result.crop}: {result.affectedPart}</h3>
+              <p className="mt-1 text-sm text-gray-500">{result.cropAge} · {result.spread}</p>
+              <p className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-950">{result.message}</p>
+              <h4 className="mt-5 font-semibold text-gray-800">Recommended next steps</h4>
+              <ul className="mt-2 space-y-2">{result.nextSteps.map((item) => <li key={item} className="flex gap-2 text-sm leading-6 text-gray-600"><span className="mt-2 h-2 w-2 shrink-0 rounded-full bg-green-600" />{item}</li>)}</ul>
+              <p className="mt-4 border-t border-gray-100 pt-3 text-xs text-gray-500">{result.safety} Record #{result.recordId}</p>
+            </div>
+            <div className="grid grid-cols-2 gap-3"><button onClick={() => { setStep(0); setImage(null); setCrop(""); setSearch(""); setAffected(""); setAge(""); setSpread(""); setResult(null); }} className="rounded-xl bg-gray-100 py-3 text-sm font-medium text-gray-700 hover:bg-gray-200">Record another observation</button><button onClick={() => navigate("/market-prices")} className="rounded-xl bg-green-600 py-3 text-sm font-medium text-white hover:bg-green-700">Check Market Prices</button></div>
+          </div>
+        )}
+        {step === 2 && result && !("nextSteps" in result) && (
           <div className="space-y-4">
             <div className="text-center mb-4">
               <h2 className="text-2xl font-bold text-gray-800">Analysis Results</h2>

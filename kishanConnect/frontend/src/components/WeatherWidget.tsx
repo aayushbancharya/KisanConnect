@@ -19,6 +19,9 @@ interface ForecastDay {
   rainProbability: number | null;
 }
 
+interface HourForecast { time: string; temperature: number; precipitation: number; rainProbability: number | null }
+interface MonthlyForecast { date: string; meanTemperature: number | null; temperatureAnomaly: number | null; precipitation: number | null; precipitationAnomaly: number | null }
+
 export interface WeatherSnapshot {
   weather: WeatherData;
   forecast: ForecastDay[];
@@ -66,7 +69,7 @@ const getFarmingAdvice = (weather: WeatherData, today?: ForecastDay): string[] =
 };
 
 const getDayName = (dateStr: string) => {
-  const date = new Date(dateStr);
+  const date = new Date(`${dateStr}T12:00:00`);
   const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
   return days[date.getDay()];
 };
@@ -74,17 +77,42 @@ const getDayName = (dateStr: string) => {
 export default function WeatherWidget({ onWeatherUpdate }: { onWeatherUpdate?: (snapshot: WeatherSnapshot) => void }) {
   const [weather, setWeather] = useState<WeatherData | null>(null);
   const [forecast, setForecast] = useState<ForecastDay[]>([]);
+  const [hourly, setHourly] = useState<HourForecast[]>([]);
+  const [monthly, setMonthly] = useState<MonthlyForecast[]>([]);
+  const [monthlyError, setMonthlyError] = useState("");
+  const [forecastView, setForecastView] = useState<"daily" | "weekly" | "monthly">("daily");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [expanded, setExpanded] = useState(false);
   const [updatedAt, setUpdatedAt] = useState("");
 
   const getWeatherData = useCallback(async (lat: number, lon: number) => {
     try {
-      const weatherUrl = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,windspeed_10m,weathercode,precipitation&daily=weathercode,temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max&timezone=Asia/Kolkata&forecast_days=5`;
-      const weatherRes = await fetch(weatherUrl);
+      const weatherUrl = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,windspeed_10m,weathercode,precipitation&hourly=temperature_2m,precipitation,precipitation_probability&daily=weathercode,temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max&timezone=Asia/Kolkata&forecast_days=16&forecast_hours=24`;
+      const [weatherRes, seasonalRes] = await Promise.all([
+        fetch(weatherUrl),
+        fetch(`https://seasonal-api.open-meteo.com/v1/seasonal?latitude=${lat}&longitude=${lon}&monthly=temperature_2m_mean,temperature_2m_anomaly,precipitation_mean,precipitation_anomaly&models=ecmwf_seasonal_ensemble_mean_seamless&timezone=Asia%2FKolkata&forecast_days=217`).catch(() => null),
+      ]);
       if (!weatherRes.ok) throw new Error("Weather service unavailable");
       const weatherData = await weatherRes.json();
+      const hourlyData = weatherData.hourly;
+      setHourly((hourlyData?.time || []).map((time: string, i: number) => ({
+        time, temperature: Math.round(hourlyData.temperature_2m[i]), precipitation: hourlyData.precipitation[i] || 0,
+        rainProbability: hourlyData.precipitation_probability?.[i] ?? null,
+      })));
+      if (seasonalRes?.ok) {
+        const seasonalData = await seasonalRes.json();
+        const monthlyData = seasonalData.monthly;
+        setMonthly((monthlyData?.time || []).map((date: string, i: number) => ({
+          date, meanTemperature: monthlyData.temperature_2m_mean?.[i] ?? null,
+          temperatureAnomaly: monthlyData.temperature_2m_anomaly?.[i] ?? null,
+          precipitation: monthlyData.precipitation_mean?.[i] ?? null,
+          precipitationAnomaly: monthlyData.precipitation_anomaly?.[i] ?? null,
+        })));
+        setMonthlyError("");
+      } else {
+        setMonthly([]);
+        setMonthlyError("The long-range seasonal service is unavailable right now.");
+      }
       const geoUrl = `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json`;
       const geoRes = await fetch(geoUrl);
       const geoData = geoRes.ok ? await geoRes.json() : {};
@@ -108,7 +136,7 @@ export default function WeatherWidget({ onWeatherUpdate }: { onWeatherUpdate?: (
       setUpdatedAt(new Date().toISOString());
       setError("");
     } catch {
-      setError("Could not fetch weather data");
+      setError("Could not fetch weather data. Check your connection and retry.");
     } finally {
       setLoading(false);
     }
@@ -211,32 +239,19 @@ export default function WeatherWidget({ onWeatherUpdate }: { onWeatherUpdate?: (
       {/* Farming Advice */}
       <div className="mt-3 border-t border-slate-100 px-5 pt-3 pb-4">
         <div className="mb-1 flex items-center justify-between gap-2"><p className="text-xs font-semibold text-slate-700">Weather based farming notes</p><span className="text-[11px] text-slate-400">Open-Meteo · {updatedAt ? new Date(updatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : ""}</span></div>
-        {advice.slice(0, expanded ? advice.length : 1).map((a, i) => (
+        {advice.map((a, i) => (
           <p key={i} className="text-xs leading-5 text-slate-600">{a}</p>
         ))}
-        <button type="button" aria-expanded={expanded} onClick={() => setExpanded(!expanded)} className="mt-2 text-xs font-semibold text-emerald-700 hover:text-emerald-900">{expanded ? "Show less" : "5-day forecast and more"}</button>
       </div>
 
-      {/* 5 Day Forecast */}
-      {expanded && (
-        <div className="border-t border-slate-100 bg-slate-50 px-5 py-4">
-          <p className="mb-2 text-xs font-semibold text-slate-700">5-day forecast</p>
-          <div className="grid grid-cols-5 gap-1">
-            {forecast.map((day, i) => {
-              const dayWeather = getWeatherDescription(day.weathercode);
-              return (
-                <div key={i} className="text-center">
-                  <p className="text-xs text-slate-500">{getDayName(day.date)}</p>
-                  <span className="text-lg">{dayWeather.icon}</span>
-                  <p className="text-xs font-semibold text-slate-900">{day.maxTemp}°</p>
-                  <p className="text-xs text-slate-500">{day.minTemp}°</p>
-                  <p className="text-[10px] text-slate-500">{day.rainfall}mm · {day.rainProbability === null ? "—" : `${day.rainProbability}%`}</p>
-                </div>
-              );
-            })}
-          </div>
+      <div className="border-t border-slate-100">
+        <div role="tablist" aria-label="Weather forecast range" className="flex gap-2 overflow-x-auto px-5 py-3">
+          {([['daily', 'Daily'], ['weekly', 'Weekly'], ['monthly', 'Monthly']] as const).map(([id, label]) => <button key={id} type="button" role="tab" aria-selected={forecastView === id} onClick={() => setForecastView(id)} className={`rounded-full px-4 py-2 text-sm font-semibold transition ${forecastView === id ? "bg-emerald-700 text-white" : "bg-slate-100 text-slate-600 hover:bg-emerald-50"}`}>{label}</button>)}
         </div>
-      )}
+        {forecastView === "daily" && <section role="tabpanel" className="bg-slate-50 px-5 py-4"><p className="mb-1 text-sm font-semibold text-slate-800">Today, hour by hour</p><p className="mb-3 text-xs text-slate-500">Next 24 hours · local time</p><div className="flex gap-3 overflow-x-auto pb-2">{hourly.map((hour) => <article key={hour.time} className="min-w-24 rounded-xl border border-slate-200 bg-white p-3 text-center"><p className="text-xs font-medium text-slate-500">{new Date(hour.time).toLocaleTimeString([], { hour: "numeric" })}</p><p className="mt-2 text-lg font-bold text-slate-900">{hour.temperature}°</p><p className="mt-1 text-xs text-blue-700">{hour.precipitation.toFixed(1)} mm</p><p className="text-[10px] text-slate-500">{hour.rainProbability == null ? "Rain chance —" : `${hour.rainProbability}% rain chance`}</p></article>)}</div></section>}
+        {forecastView === "weekly" && <section role="tabpanel" className="bg-slate-50 px-5 py-4"><p className="mb-3 text-sm font-semibold text-slate-800">7-day forecast</p><div className="grid grid-cols-2 gap-2 sm:grid-cols-4 md:grid-cols-7">{forecast.slice(0, 7).map((day) => { const dayWeather = getWeatherDescription(day.weathercode); return <article key={day.date} className="rounded-xl border border-slate-200 bg-white p-3 text-center"><p className="text-xs font-medium text-slate-500">{getDayName(day.date)} · {new Date(`${day.date}T12:00:00`).getDate()}</p><span className="text-xl">{dayWeather.icon}</span><p className="text-sm font-semibold text-slate-900">{day.maxTemp}° <span className="font-normal text-slate-500">{day.minTemp}°</span></p><p className="mt-1 text-[11px] text-blue-700">{day.rainfall} mm rain</p><p className="text-[10px] text-slate-500">{day.rainProbability == null ? "Rain chance —" : `${day.rainProbability}% chance`}</p></article>; })}</div></section>}
+        {forecastView === "monthly" && <section role="tabpanel" className="bg-slate-50 px-5 py-4"><p className="text-sm font-semibold text-slate-800">Monthly seasonal outlook</p><p className="mb-3 mt-1 text-xs leading-5 text-slate-500">ECMWF ensemble guidance for broad regional trends. Long-range values are uncertain and are not a local day-by-day forecast.</p>{monthly.length ? <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{monthly.map((month) => <article key={month.date} className="rounded-xl border border-slate-200 bg-white p-4"><h4 className="font-semibold text-slate-800">{new Date(`${month.date}T12:00:00`).toLocaleDateString(undefined, { month: "long", year: "numeric" })}</h4><div className="mt-3 grid grid-cols-2 gap-3"><div><p className="text-[11px] text-slate-500">Mean temperature</p><p className="text-lg font-bold text-slate-900">{month.meanTemperature == null ? "—" : `${month.meanTemperature.toFixed(1)}°C`}</p>{month.temperatureAnomaly != null && <p className="text-[11px] text-slate-500">{month.temperatureAnomaly > 0 ? "+" : ""}{month.temperatureAnomaly.toFixed(1)}° vs normal</p>}</div><div><p className="text-[11px] text-slate-500">Precipitation outlook</p><p className="text-lg font-bold text-blue-800">{month.precipitation == null ? "—" : `${month.precipitation.toFixed(1)} mm`}</p>{month.precipitationAnomaly != null && <p className="text-[11px] text-slate-500">{month.precipitationAnomaly > 0 ? "+" : ""}{month.precipitationAnomaly.toFixed(1)} mm vs normal</p>}</div></div></article>)}</div> : <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">{monthlyError || "Monthly outlook is not available for this location right now."}</div>}</section>}
+      </div>
 
     </div>
   );

@@ -7,10 +7,10 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['icon-192.png', 'icon-512.png'],
+      includeAssets: ['kisanconnect-logo.png'],
       manifest: {
-        name: 'Smart Crop 360',
-        short_name: 'Crop 360',
+        name: 'KisanConnect',
+        short_name: 'KisanConnect',
         description: 'AI-powered farming assistant for Indian farmers',
         theme_color: '#16a34a',
         background_color: '#ffffff',
@@ -18,13 +18,13 @@ export default defineConfig({
         start_url: '/',
         icons: [
           {
-            src: '/icon-192.png',
+            src: '/kisanconnect-logo.png',
             sizes: '192x192',
             type: 'image/png',
             purpose: 'any maskable'
           },
           {
-            src: '/icon-512.png',
+            src: '/kisanconnect-logo.png',
             sizes: '512x512',
             type: 'image/png',
             purpose: 'any maskable'

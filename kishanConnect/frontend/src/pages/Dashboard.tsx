@@ -136,8 +136,8 @@ export default function Dashboard() {
 
   const renderSidebar = (mobile = false) => <aside className={`flex h-full flex-col bg-[#10261d] text-white ${mobile ? "w-[284px]" : collapsed ? "w-[76px]" : "w-64"}`}>
     <div className={`flex h-[76px] items-center border-b border-white/10 ${collapsed && !mobile ? "justify-center px-2" : "gap-3 px-5"}`}>
-      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-500 text-white"><Icon name="sprout" className="h-6 w-6"/></div>
-      {(!collapsed || mobile) && <div className="min-w-0"><div className="truncate text-sm font-bold tracking-wide">SMART CROP <span className="text-emerald-300">360</span></div><div className="mt-0.5 text-[10px] uppercase tracking-[.18em] text-emerald-100/60">Farm intelligence</div></div>}
+      <img src="/kisanconnect-logo.png" alt="KisanConnect" className="h-10 w-10 shrink-0 rounded-xl object-cover" />
+      {(!collapsed || mobile) && <div className="min-w-0"><div className="truncate text-sm font-bold tracking-wide">Kisan<span className="text-emerald-300">Connect</span></div><div className="mt-0.5 text-[10px] uppercase tracking-[.18em] text-emerald-100/60">Farm intelligence</div></div>}
       {mobile && <button aria-label="Close navigation" className="ml-auto rounded-lg p-2 text-white/70 hover:bg-white/10" onClick={() => setMobileOpen(false)}><Icon name="close"/></button>}
     </div>
     <nav aria-label="Main navigation" className="flex-1 space-y-5 overflow-y-auto px-3 py-5">

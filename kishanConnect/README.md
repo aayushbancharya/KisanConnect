@@ -1,6 +1,6 @@
-# Smart Crop 360
+# KisanConnect
 
-Smart Crop 360 is a React and Flask farming assistant for Indian farmers. It includes a shared responsive SaaS navigation shell, farm dashboard, account-linked farm profiles, saved advisory history, safe irrigation and nutrient guidance, marketplace inquiries and replies, and links to official scheme portals. Recommendations and unavailable model states are labeled by their source and limitations.
+KisanConnect is a React and Flask farming assistant for Indian farmers. It includes a shared responsive SaaS navigation shell, farm dashboard, account-linked farm profiles, saved advisory history, safe irrigation and nutrient guidance, marketplace inquiries and replies, and links to official scheme portals. Recommendations and unavailable model states are labeled by their source and limitations.
 
 ## Technology
 

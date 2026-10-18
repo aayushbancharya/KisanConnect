@@ -9,13 +9,41 @@ const fields = "w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 t
 const button = "rounded-xl bg-green-700 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-green-800 disabled:opacity-50";
 
 async function request(path: string, init: RequestInit = {}) {
-  const response = await fetch(`${API}${path}`, { ...init, headers: {
-    "Content-Type": "application/json", Authorization: `Bearer ${localStorage.getItem("token") || ""}`,
-    ...(init.headers || {}),
-  } });
-  const data = await response.json();
-  if (!response.ok) throw new Error(data.error || "Request failed");
+  let response: Response;
+  try {
+    response = await fetch(`${API}${path}`, { ...init, headers: {
+      "Content-Type": "application/json", Authorization: `Bearer ${localStorage.getItem("token") || ""}`,
+      ...(init.headers || {}),
+    } });
+  } catch {
+    throw new Error(`Could not reach the farm service at ${API}. Check that the backend is running and try again.`);
+  }
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || `Request failed (${response.status})`);
   return data;
+}
+
+function GuidanceResult({ result }: { result: Record<string, unknown> }) {
+  const recommendations = Array.isArray(result.recommendations) ? result.recommendations as Array<Record<string, unknown>> : [];
+  const excluded = new Set(["label", "status", "recordId", "recommendations", "inputs"]);
+  const details = Object.entries(result).filter(([key, value]) => !excluded.has(key) && value != null && value !== "");
+  const inputDetails = result.inputs && typeof result.inputs === "object" ? Object.entries(result.inputs as Record<string, unknown>).filter(([, value]) => value != null && value !== "") : [];
+  const title = (key: string) => key.replace(/([A-Z])/g, " $1").replace(/^./, (letter) => letter.toUpperCase());
+  const valueText = (value: unknown) => Array.isArray(value) ? value.join(", ") : String(value);
+
+  return <section aria-live="polite" className="mt-5 rounded-2xl border border-green-200 bg-gradient-to-br from-green-50 to-white p-5">
+    <div className="flex flex-wrap items-start justify-between gap-2">
+      <div><p className="text-xs font-bold uppercase tracking-wide text-green-800">Farm guidance</p><h3 className="mt-1 text-base font-semibold text-slate-900">{String(result.label || result.status || "Your result")}</h3></div>
+      {result.recordId != null && <span className="rounded-full bg-white px-3 py-1 text-xs font-medium text-green-800">Saved to farm records</span>}
+    </div>
+    {recommendations.length > 0 && <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">{recommendations.map((item, index) => <article key={`${String(item.crop)}-${index}`} className="rounded-xl border border-green-100 bg-white p-4 shadow-sm">
+      <div className="flex items-center gap-2"><span className="flex h-7 w-7 items-center justify-center rounded-full bg-green-100 text-xs font-bold text-green-800">{index + 1}</span><h4 className="font-semibold text-slate-900">{String(item.crop || "Option")}</h4></div>
+      {Boolean(item.reason) && <p className="mt-3 text-sm leading-5 text-slate-600">{String(item.reason)}</p>}
+      {Boolean(item.season) && <p className="mt-3 text-xs font-medium text-green-800">{String(item.season)} season</p>}
+    </article>)}</div>}
+    {details.length > 0 && <dl className={`mt-4 grid gap-3 ${recommendations.length ? "sm:grid-cols-2" : "sm:grid-cols-2"}`}>{details.map(([key, value]) => <div key={key} className="rounded-xl bg-white/80 p-3"><dt className="text-xs font-medium text-slate-500">{title(key)}</dt><dd className="mt-1 text-sm leading-5 text-slate-800">{valueText(value)}</dd></div>)}</dl>}
+    {inputDetails.length > 0 && <div className="mt-4 border-t border-green-100 pt-3"><p className="text-xs font-semibold text-slate-500">Based on your inputs</p><dl className="mt-2 flex flex-wrap gap-2">{inputDetails.map(([key, value]) => <div key={key} className="rounded-full bg-white px-3 py-1.5 text-xs text-slate-600"><dt className="inline font-medium">{title(key)}: </dt><dd className="inline">{valueText(value)}</dd></div>)}</dl></div>}
+  </section>;
 }
 
 export default function FarmTools() {
@@ -118,7 +146,7 @@ export default function FarmTools() {
             {module === "disease-analysis" && <p className="rounded-xl bg-amber-50 p-3 text-sm text-amber-900">Image analysis stays unavailable until a genuine inference model or provider is configured.</p>}
             <button className={button} disabled={busy}>{busy ? "Working…" : module === "disease-analysis" ? "Check model availability" : "Save and get guidance"}</button>
           </form>}
-          {result && <div className="mt-4 rounded-xl border border-green-100 bg-green-50 p-4"><div className="text-xs font-bold uppercase tracking-wide text-green-800">{String(result.label || result.status)}</div><pre className="mt-2 whitespace-pre-wrap break-words font-sans text-sm leading-6 text-slate-700">{JSON.stringify(Object.fromEntries(Object.entries(result).filter(([key]) => key !== "label" && key !== "status" && key !== "recordId")), null, 2)}</pre></div>}
+          {result && <GuidanceResult result={result} />}
         </section>
       </div>
       <section className="mt-5 grid gap-5 lg:grid-cols-2">

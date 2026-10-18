@@ -1,6 +1,6 @@
 {
-  "name": "Smart Crop 360",
-  "short_name": "Crop 360",
+  "name": "KisanConnect",
+  "short_name": "KisanConnect",
   "description": "AI-powered farming assistant for Indian farmers",
   "start_url": "/",
   "display": "standalone",
@@ -9,13 +9,13 @@
   "orientation": "portrait",
   "icons": [
     {
-      "src": "/icon-192.png",
+      "src": "/kisanconnect-logo.png",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any maskable"
     },
     {
-      "src": "/icon-512.png",
+      "src": "/kisanconnect-logo.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any maskable"

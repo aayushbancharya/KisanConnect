@@ -104,8 +104,8 @@ export default function Login() {
 
         {/* Logo */}
         <div className="text-center mb-6">
-          <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-emerald-50 text-emerald-700"><svg aria-hidden="true" viewBox="0 0 24 24" className="h-7 w-7" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 21v-9M12 12C7 12 5 9 5 5c4 0 7 2 7 7ZM12 15c0-4 2-7 7-7 0 4-2 7-7 7Z"/></svg></div>
-          <h1 className="text-2xl font-bold text-green-700">SMART CROP 360</h1>
+          <img src="/kisanconnect-logo.png" alt="KisanConnect" className="mx-auto mb-3 h-24 w-24 rounded-2xl object-cover" />
+          <h1 className="text-2xl font-bold text-green-700">KisanConnect</h1>
           <p className="text-gray-500 text-sm">Your AI-powered farming companion</p>
         </div>
 
@@ -202,7 +202,7 @@ export default function Login() {
         </div>
 
         <p className="text-center text-xs text-gray-400 mt-6">
-          Smart Crop 360 • AI Farming Assistant
+          KisanConnect • AI Farming Assistant
         </p>
       </div>
     </div>

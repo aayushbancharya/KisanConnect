@@ -60,6 +60,8 @@ export default function MarketPrices() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [searched, setSearched] = useState(false);
+  const [dataSource, setDataSource] = useState("");
+  const [dataNote, setDataNote] = useState("");
 
   const filteredCrops = allCrops.filter((c) =>
     c.toLowerCase().includes(cropSearch.toLowerCase())
@@ -68,22 +70,29 @@ export default function MarketPrices() {
   const fetchPrices = async () => {
     setLoading(true);
     setError("");
+    setDataSource("");
+    setDataNote("");
     setResults([]);
     setSearched(true);
 
     try {
       const url = `${BACKEND_URL}/api/market-prices?commodity=${encodeURIComponent(crop)}&state=${encodeURIComponent(state)}`;
-      const response = await fetch(url);
-      const data = await response.json();
+      const response = await fetch(url, { signal: AbortSignal.timeout(15000) });
+      const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.error || "Official market prices are unavailable right now.");
 
-      if (data.records && data.records.length > 0) {
-        setResults(data.records);
+      const records = Array.isArray(data.records) ? data.records.filter((record: MandiData) => record?.modal_price) : [];
+      if (records.length > 0) {
+        setResults(records);
+        setDataSource(data.source || "Official mandi data");
+        setDataNote(data.note || "Prices are reported market data; availability and reporting dates vary by mandi.");
       } else {
-        setError(`No price data found for ${crop} in ${state}. Try: Tomato in Karnataka, Onion in Maharashtra, Wheat in Punjab`);
+        setError(data.error || `No recent reported prices were found for ${crop} in ${state}. Try another crop or state.`);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to connect to the official market data service.");
+      setError(err instanceof DOMException && err.name === "TimeoutError"
+        ? "The official market data service took too long to respond. Please retry."
+        : err instanceof Error ? err.message : "Failed to connect to the official market data service.");
     } finally {
       setLoading(false);
     }
@@ -114,7 +123,7 @@ export default function MarketPrices() {
         <div className="text-center mb-6">
           <h2 className="text-2xl font-bold text-gray-800">Official Mandi Prices</h2>
           <p className="text-sm text-gray-500 mt-1">
-            Prices are shown only when returned by the configured data.gov.in service.
+            Recent reported prices from official data.gov.in and AGMARKNET sources. Availability varies by mandi.
           </p>
         </div>
 
@@ -253,6 +262,7 @@ export default function MarketPrices() {
                 ({results.length} markets found)
               </span>
             </h3>
+            <p className="mb-4 text-xs text-gray-500">Source: {dataSource}. {dataNote}</p>
 
             <div className="space-y-3">
               {[...results]
@@ -286,7 +296,7 @@ export default function MarketPrices() {
                         <p className="font-bold text-green-700 text-lg">
                           ₹{item.modal_price}
                         </p>
-                        <p className="text-xs text-gray-400">Modal Price</p>
+                        <p className="text-xs text-gray-400">Reported price / quintal</p>
                         <p className="text-xs text-gray-500 mt-1">
                           ₹{item.min_price} – ₹{item.max_price}
                         </p>

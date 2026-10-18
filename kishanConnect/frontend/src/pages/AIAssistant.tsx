@@ -25,6 +25,7 @@ const suggestedQuestions = [
   "Which fertilizer is best for wheat?",
   "How to control pests in cotton?",
 ];
+const languageLabels: Record<string, string> = { en: "English", hi: "Hindi", kn: "Kannada", ta: "Tamil", te: "Telugu", mr: "Marathi", pa: "Punjabi", gu: "Gujarati", bn: "Bengali", or: "Odia", ml: "Malayalam", as: "Assamese" };
 
 interface Message {
   role: "user" | "assistant";
@@ -36,12 +37,17 @@ type Recognition = {
   lang: string;
   continuous: boolean;
   interimResults: boolean;
-  onresult: ((event: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void) | null;
-  onerror: (() => void) | null;
+  onresult: ((event: { resultIndex: number; results: ArrayLike<ArrayLike<{ transcript: string; isFinal?: boolean }>> }) => void) | null;
+  onerror: ((event: { error: string }) => void) | null;
+  onstart: (() => void) | null;
+  onend: (() => void) | null;
   start: () => void;
+  stop: () => void;
+  abort: () => void;
 };
 type SpeechWindow = Window & { SpeechRecognition?: new () => Recognition; webkitSpeechRecognition?: new () => Recognition };
 const speechLocale: Record<string, string> = { en: "en-IN", hi: "hi-IN", kn: "kn-IN", ta: "ta-IN", te: "te-IN", mr: "mr-IN", pa: "pa-IN", gu: "gu-IN", bn: "bn-IN", or: "or-IN", ml: "ml-IN", as: "as-IN" };
+const backendUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:5000";
 
 export default function AIAssistant() {
   const [selectedLang, setSelectedLang] = useState(languages[0]);
@@ -50,19 +56,22 @@ export default function AIAssistant() {
   const [messages, setMessages] = useState<Message[]>([
     {
       role: "assistant",
-      content: "Welcome to Smart Crop 360.\n\nI can discuss crop planning, symptoms to discuss with an expert, soil and irrigation practices, and general farming questions. I do not have live price, weather, sensor, or disease model data.\n\nAsk a farming question in your selected language.",
+      content: "Welcome to KisanConnect.\n\nI can discuss crop planning, symptoms to discuss with an expert, soil and irrigation practices, and general farming questions. I do not have live price, weather, sensor, or disease model data.\n\nAsk a farming question in your selected language.",
       time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
     },
   ]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [voiceError, setVoiceError] = useState("");
+  const [listening, setListening] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const recognitionRef = useRef<Recognition | null>(null);
+
+  useEffect(() => () => recognitionRef.current?.abort(), []);
 
   useEffect(() => {
     const task = window.setTimeout(async () => {
       try {
-        const backendUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:5000";
         const response = await fetch(`${backendUrl}/api/farms`, { headers: { Authorization: `Bearer ${localStorage.getItem("token") || ""}` } });
         if (!response.ok) return;
         const data = await response.json(); setFarms(data.farms || []);
@@ -85,7 +94,7 @@ export default function AIAssistant() {
   }, [messages]);
 
   const getSystemPrompt = (language: string = "English") => {
-    return `You are a STRICT agricultural assistant for Indian farmers in the Smart-Crop 360 app.
+    return `You are a STRICT agricultural assistant for Indian farmers in the KisanConnect app.
 
 YOUR ONLY JOB is to help farmers with these topics:
 1. Crop selection (which crop to grow, when, where)
@@ -132,6 +141,10 @@ STRICT RULES:
   };
 
   const startVoiceInput = () => {
+    if (recognitionRef.current) {
+      recognitionRef.current.stop();
+      return;
+    }
     const speech = window as SpeechWindow;
     const RecognitionConstructor = speech.SpeechRecognition || speech.webkitSpeechRecognition;
     if (!RecognitionConstructor) {
@@ -139,13 +152,38 @@ STRICT RULES:
       return;
     }
     setVoiceError("");
-    const recognition = new RecognitionConstructor();
-    recognition.lang = speechLocale[selectedLang.code] || "en-IN";
-    recognition.continuous = false;
-    recognition.interimResults = false;
-    recognition.onresult = (event) => setInput((current) => `${current}${current ? " " : ""}${event.results[0][0].transcript}`);
-    recognition.onerror = () => setVoiceError("Could not hear that clearly. Please try again or type your question.");
-    recognition.start();
+    try {
+      const recognition = new RecognitionConstructor();
+      recognitionRef.current = recognition;
+      recognition.lang = speechLocale[selectedLang.code] || "en-IN";
+      recognition.continuous = false;
+      recognition.interimResults = true;
+      recognition.onstart = () => { setListening(true); setVoiceError(""); };
+      recognition.onresult = (event) => {
+        let transcript = "";
+        for (let index = event.resultIndex; index < event.results.length; index += 1) {
+          if (event.results[index].isFinal !== false) transcript += event.results[index][0]?.transcript || "";
+        }
+        if (transcript.trim()) setInput((current) => `${current}${current ? " " : ""}${transcript.trim()}`);
+      };
+      recognition.onerror = (event) => {
+        setVoiceError(event.error === "not-allowed" || event.error === "service-not-allowed"
+          ? "Microphone access is blocked. Allow microphone permission for this site, then try again."
+          : event.error === "audio-capture"
+            ? "No microphone was detected. Connect or enable a microphone and try again."
+            : event.error === "network"
+              ? "Browser speech recognition could not reach its speech service. Check your connection or type your question."
+              : event.error === "no-speech"
+                ? "No speech was detected. Try again and speak after the microphone opens."
+                : "Voice recognition stopped unexpectedly. Please try again or type your question.");
+      };
+      recognition.onend = () => { recognitionRef.current = null; setListening(false); };
+      recognition.start();
+    } catch {
+      recognitionRef.current = null;
+      setListening(false);
+      setVoiceError("Could not start voice input. Check microphone permission and try again.");
+    }
   };
 
   const speakReply = (text: string) => {
@@ -174,12 +212,12 @@ STRICT RULES:
     setLoading(true);
 
     try {
-      const backendUrl = import.meta.env.VITE_BACKEND_URL || "https://backend-smart-crop-360.onrender.com";
       const response = await fetch(`${backendUrl}/api/ai-assistant`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${localStorage.getItem("token") || ""}` },
         body: JSON.stringify({
           system: getSystemPrompt(selectedLang.name),
+          languageCode: selectedLang.code,
           farmContext: farms.find((farm) => String(farm.id) === farmId) || null,
           messages: [
             ...messages.map((m) => ({

@@ -6,9 +6,12 @@ import requests
 import os
 import jwt
 import datetime
+import time
 import json
 import secrets
 import math
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import wraps
 from dotenv import load_dotenv
 
@@ -27,6 +30,48 @@ bcrypt = Bcrypt(app)
 
 AGMARKNET_API_KEY = os.getenv("AGMARKNET_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
+
+_mandi_cache = {}
+_mandi_cache_lock = threading.Lock()
+AGMARKNET_BASE_URL = "https://api.agmarknet.gov.in/v1"
+AGMARKNET_HEADERS = {
+    "Accept": "application/json, text/plain, */*",
+    "Origin": "https://agmarknet.gov.in",
+    "Referer": "https://agmarknet.gov.in/",
+    "User-Agent": "Mozilla/5.0 (compatible; KisanConnect/1.0)",
+}
+
+
+def _first_value(record, *names, default=""):
+    """Read a field from data.gov.in/AGMARKNET despite label/case differences."""
+    values = {str(key).strip().casefold().replace(" ", "_"): value for key, value in record.items()}
+    for name in names:
+        value = values.get(name.casefold().replace(" ", "_"))
+        if value not in (None, ""):
+            return str(value).strip()
+    return default
+
+
+def _normalise_mandi_records(records, commodity, state):
+    """Convert the varying official API field names into the frontend contract."""
+    normalised = []
+    for record in records or []:
+        modal = _first_value(record, "modal_price", "modal price", "modal", "price")
+        if not modal or not any(char.isdigit() for char in modal):
+            continue
+        normalised.append({
+            "state": _first_value(record, "state", default=state),
+            "district": _first_value(record, "district", "district_name", "dist_name", default="Not specified"),
+            "market": _first_value(record, "market", "market_name", "mkt_name", "mandi", default="Not specified"),
+            "commodity": _first_value(record, "commodity", "commodity_name", default=commodity),
+            "variety": _first_value(record, "variety", "variety_name", default="Not specified"),
+            "min_price": _first_value(record, "min_price", "min price", "minimum_price", default="—"),
+            "max_price": _first_value(record, "max_price", "max price", "maximum_price", default="—"),
+            "modal_price": modal,
+            "arrival_date": _first_value(record, "arrival_date", "arrival date", "price_date", "date", default="Not specified"),
+        })
+    return normalised
 
 # User Model
 class User(db.Model):
@@ -142,7 +187,7 @@ with app.app_context():
 
 @app.route('/')
 def home():
-    return jsonify({"message": "Smart Crop 360 Backend is running!", "status": "ok"})
+    return jsonify({"message": "KisanConnect Backend is running!", "status": "ok"})
 
 def authenticated_user():
     token = request.headers.get('Authorization', '').replace('Bearer ', '', 1)
@@ -220,10 +265,7 @@ def select_farm_crop(user, farm_id):
 def farm_tools(user, kind):
     data = request.get_json(silent=True) or {}
     allowed = {'crop-advice', 'irrigation', 'nutrient-advice', 'yield-estimate'}
-    if kind == 'disease-analysis':
-        return jsonify({'error': 'Disease image analysis is unavailable: no trained inference model or provider is configured.',
-                        'status': 'provider_unconfigured', 'requiredConfiguration': 'Configure a genuine crop disease inference provider before enabling predictions.'}), 503
-    if kind not in allowed:
+    if kind not in allowed and kind != 'disease-analysis':
         return jsonify({'error': 'Unknown farm tool.'}), 404
     farm = None
     if data.get('farmId') is not None:
@@ -231,6 +273,33 @@ def farm_tools(user, kind):
         if not farm:
             return jsonify({'error': 'Farm not found.'}), 404
     crop = str(data.get('crop') or (farm.current_crop if farm else '') or '').strip()[:80]
+    if kind == 'disease-analysis':
+        affected_part = str(data.get('affectedPart') or '').strip()
+        crop_age = str(data.get('cropAge') or '').strip()
+        spread = str(data.get('spread') or '').strip()
+        if not crop or affected_part not in {'Leaf', 'Stem', 'Fruit', 'Root', 'Whole Plant'} or crop_age not in {'Just planted', 'Young plant', 'Grown plant', 'Ready to harvest'} or spread not in {'Only a few plants', 'About half the field', 'Most of the field'}:
+            return jsonify({'error': 'Choose a crop, affected plant part, crop age, and affected area before saving the field observation.'}), 400
+        if spread == 'Most of the field':
+            urgency = 'Contact your local agricultural extension officer promptly because the problem is widespread.'
+        elif spread == 'About half the field':
+            urgency = 'Arrange an in-person assessment soon and check nearby rows for spread.'
+        else:
+            urgency = 'Mark affected plants and check whether symptoms spread over the next 1–2 days.'
+        result = {
+            'status': 'field_observation_saved',
+            'label': 'Field observation saved — photo not diagnosed',
+            'message': 'No image-classification model is configured, so this photo was not analyzed and no disease has been identified.',
+            'crop': crop, 'affectedPart': affected_part, 'cropAge': crop_age, 'spread': spread,
+            'nextSteps': [urgency, 'Take clear photos of both affected and healthy plants, including close-ups and the whole plant.',
+                         'Avoid applying pesticide or mixing products until a qualified local expert confirms the cause.'],
+            'safety': 'This is an observation record, not a diagnosis or treatment prescription.'
+        }
+        record = FarmRecord(owner_id=user.id, farm_id=farm.id if farm else None, kind='disease-observation', crop=crop,
+                            payload=json.dumps(result, ensure_ascii=False))
+        db.session.add(record)
+        db.session.commit()
+        result['recordId'] = record.id
+        return jsonify(result), 200
     if kind == 'crop-advice':
         soil = str(data.get('soilType') or (farm.soil_type if farm else '')).lower()
         water = str(data.get('waterAvailability', 'medium')).lower()
@@ -298,6 +367,17 @@ def schemes():
         {'name': 'PM-KISAN', 'description': 'Check current PM-KISAN information and beneficiary services.', 'url': 'https://pmkisan.gov.in/'},
         {'name': 'Pradhan Mantri Fasal Bima Yojana', 'description': 'Check crop insurance details and current enrollment windows.', 'url': 'https://pmfby.gov.in/'},
         {'name': 'e-NAM', 'description': 'Official national agriculture market portal.', 'url': 'https://enam.gov.in/'},
+        {'name': 'Kisan Credit Card (KCC)', 'description': 'Explore bank credit for crop cultivation, post-harvest needs, and eligible allied activities. Apply through participating banks; terms and eligibility apply.', 'url': 'https://www.myscheme.gov.in/schemes/kcc'},
+        {'name': 'Soil Health Card', 'description': 'Access soil testing services and soil nutrient reports to help plan crop and input decisions.', 'url': 'https://soilhealth.dac.gov.in/'},
+        {'name': 'Pradhan Mantri Krishi Sinchayee Yojana (PMKSY)', 'description': 'Explore irrigation, water-use efficiency, and watershed programme information. Components and application routes vary by state.', 'url': 'https://pmksy.gov.in/'},
+        {'name': 'PM-KUSUM', 'description': 'Check official information on solar pumps and solarisation of agricultural power. Contact your state implementing agency for current application windows.', 'url': 'https://pmkusum.mnre.gov.in/'},
+        {'name': 'National Mission on Natural Farming', 'description': 'Find training, demonstrations, and guidance for farmers interested in natural farming practices.', 'url': 'https://www.myscheme.gov.in/schemes/nmnf'},
+        {'name': 'Agriculture Infrastructure Fund (AIF)', 'description': 'Explore financing support for eligible post-harvest infrastructure and community farming assets; lending and eligibility conditions apply.', 'url': 'https://agriinfra.dac.gov.in/'},
+        {'name': 'Mission for Integrated Development of Horticulture (MIDH)', 'description': 'Review programme support related to horticulture, planting material, protected cultivation, and post-harvest activities. State guidelines apply.', 'url': 'https://www.myscheme.gov.in/schemes/midh'},
+        {'name': 'Pradhan Mantri Kisan Maandhan Yojana', 'description': 'Check the voluntary pension scheme information for eligible small and marginal farmers.', 'url': 'https://www.myscheme.gov.in/schemes/pmkmdy'},
+        {'name': 'Formation and Promotion of 10,000 FPOs', 'description': 'Learn about farmer producer organisations, support, and official programme resources through SFAC.', 'url': 'https://sfacindia.com/fpos.aspx'},
+        {'name': 'Pradhan Mantri Matsya Sampada Yojana (PMMSY)', 'description': 'Official scheme information for fishers, fish farmers, and fisheries enterprises.', 'url': 'https://dof.gov.in/pmmsy'},
+        {'name': 'National Food Security Mission (NFSM)', 'description': 'Explore crop productivity and food security mission information; state implementation and support vary.', 'url': 'https://nfsm.gov.in/'},
     ], 'notice': 'Availability and eligibility vary by location and date. Verify details on the linked government portal.'})
 
 # Register
@@ -417,31 +497,107 @@ def market_prices():
     state = request.args.get('state', '')
     if not commodity.strip() or not state.strip():
         return jsonify({'error': 'Commodity and state are required.'}), 400
-    if not AGMARKNET_API_KEY:
-        return jsonify({'error': 'Live mandi data is not configured. Add AGMARKNET_API_KEY to backend/.env.', 'source': 'unavailable'}), 503
-    resource_ids = [
-        "9ef84268-d588-465a-a308-a864a43d0070",
-        "35985678-0d79-46b4-9ed6-6f13308a1d24",
-    ]
-    for resource_id in resource_ids:
-        try:
-            url = f"https://api.data.gov.in/resource/{resource_id}"
-            params = {
-                "api-key": AGMARKNET_API_KEY,
-                "format": "json",
-                "filters[commodity]": commodity,
-                "filters[state]": state,
-                "limit": 20,
-            }
-            # Keep the two official resource attempts bounded so an unavailable provider
-            # cannot leave the development API worker waiting for a minute.
-            response = requests.get(url, params=params, timeout=(3, 5))
-            data = response.json()
-            if data.get("records") and len(data["records"]) > 0:
-                return jsonify({**data, 'source': 'data.gov.in', 'live': True})
-        except Exception:
-            continue
-    return jsonify({'error': 'The official market data service did not return records. Please retry later.', 'source': 'data.gov.in'}), 502
+    cache_key = (commodity.strip().casefold(), state.strip().casefold())
+    with _mandi_cache_lock:
+        cached = _mandi_cache.get(cache_key)
+        if cached and time.time() - cached[0] < 1800:
+            return jsonify(cached[1])
+
+    # Prefer the keyed open-data API when it responds. It is currently unreliable in
+    # some regions, so fall through to AGMARKNET's own public market reports.
+    if AGMARKNET_API_KEY:
+        for resource_id in ("9ef84268-d588-465a-a308-a864a43d0070", "35985678-0d79-46b4-9ed6-6f13308a1d24"):
+            try:
+                response = requests.get(
+                    f"https://api.data.gov.in/resource/{resource_id}",
+                    params={"api-key": AGMARKNET_API_KEY, "format": "json", "filters[commodity]": commodity,
+                            "filters[state]": state, "limit": 20},
+                    timeout=(2, 2),
+                )
+                data = response.json()
+                records = _normalise_mandi_records(data.get("records", []), commodity.strip(), state.strip())
+                if response.ok and records:
+                    result = {"records": records[:20], "source": "data.gov.in", "live": True,
+                              "note": "Recent reported prices from the Government of India's open mandi data. Prices and reporting dates vary by market."}
+                    with _mandi_cache_lock:
+                        _mandi_cache[cache_key] = (time.time(), result)
+                    return jsonify(result)
+            except (requests.RequestException, ValueError):
+                continue
+
+    try:
+        filters_response = requests.get(f"{AGMARKNET_BASE_URL}/daily-price-arrival/filters",
+                                        headers=AGMARKNET_HEADERS, timeout=(3, 6))
+        filters_response.raise_for_status()
+        filters_payload = filters_response.json()
+        filters_data = filters_payload.get("data", filters_payload)
+        commodity_entry = next((item for item in filters_data.get("cmdt_data", [])
+                                if str(item.get("commodity", item.get("commodity_name", item.get("cmdt_name", "")))).casefold() == commodity.strip().casefold()), None)
+        state_entry = next((item for item in filters_data.get("state_data", [])
+                           if str(item.get("state", item.get("state_name", item.get("st_name", "")))).casefold() == state.strip().casefold()), None)
+        if not commodity_entry or not state_entry:
+            return jsonify({'error': f'AGMARKNET has no matching commodity or state for {commodity} in {state}.', 'source': 'AGMARKNET'}), 404
+
+        commodity_id = commodity_entry.get("commodity_id", commodity_entry.get("cmdt_id", commodity_entry.get("id")))
+        state_id = state_entry.get("state_id", state_entry.get("st_id", state_entry.get("id")))
+        markets = [market for market in filters_data.get("market_data", [])
+                   if str(market.get("state_id", market.get("st_id", ""))) == str(state_id)]
+        # Keep the lookup bounded while scanning enough markets to find recent reports.
+        markets = markets[:48]
+        if not markets:
+            return jsonify({'error': f'AGMARKNET has no listed markets for {state}.', 'source': 'AGMARKNET'}), 404
+
+        def get_market_report(market):
+            market_id = market.get("market_id", market.get("mkt_id", market.get("id")))
+            if not market_id:
+                return []
+            try:
+                report = requests.get(
+                    f"{AGMARKNET_BASE_URL}/prices-and-arrivals/market-price/lastweek",
+                    params={"marketId": market_id, "stateId": state_id, "commodityId": commodity_id,
+                            "includeExcel": "false"},
+                    headers=AGMARKNET_HEADERS, timeout=(2, 4),
+                )
+                if not report.ok:
+                    return []
+                payload = report.json()
+                columns = [col.get("key") for col in payload.get("columns", []) if col.get("key")]
+                date_columns = sorted((key for key in columns if key[:4].isdigit() and "-" in key), reverse=True)
+                output = []
+                market_name = market.get("mkt_name", market.get("market_name", market.get("market", "")))
+                district_name = market.get("district_name", market.get("dist_name", market.get("district", "")))
+                for row in payload.get("data", []):
+                    price = next((row.get(day) for day in date_columns
+                                  if str(row.get(day, "")).replace(",", "").replace(".", "", 1).isdigit()), None)
+                    if price is None:
+                        continue
+                    output.append({"state": state, "district": district_name, "market": market_name,
+                                   "commodity": commodity, "variety": row.get("variety", "Not specified"),
+                                   "min_price": "—", "max_price": "—", "modal_price": str(price),
+                                   "arrival_date": next((day for day in date_columns
+                                                         if str(row.get(day, "")).replace(",", "").replace(".", "", 1).isdigit()), "")})
+                return output
+            except (requests.RequestException, ValueError):
+                return []
+
+        records = []
+        with ThreadPoolExecutor(max_workers=12) as executor:
+            futures = [executor.submit(get_market_report, market) for market in markets]
+            for future in as_completed(futures):
+                records.extend(future.result())
+                if len(records) >= 20:
+                    break
+        if records:
+            result = {"records": records[:20], "source": "AGMARKNET", "live": True,
+                      "note": "Recent reported prices from AGMARKNET's last-seven-day market reports. Missing days are not estimated."}
+            with _mandi_cache_lock:
+                _mandi_cache[cache_key] = (time.time(), result)
+            return jsonify(result)
+        return jsonify({'error': f'No recent {commodity} prices were reported by the markets checked in {state}. Try another crop or state.',
+                        'source': 'AGMARKNET', 'markets_checked': len(markets)}), 404
+    except (requests.RequestException, ValueError, KeyError) as error:
+        app.logger.warning("Official mandi lookup failed (%s)", type(error).__name__)
+        return jsonify({'error': 'Official mandi data is temporarily unavailable. Please retry shortly.', 'source': 'AGMARKNET'}), 502
 
 
 @app.route('/api/ai-assistant', methods=['POST'])
@@ -476,7 +632,7 @@ def ai_assistant(user):
                           "dosages; direct the farmer to the product label and a local agricultural extension officer. "
                           "Clearly state uncertainty and recommend local expert review when field conditions matter.")
 
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key={GEMINI_API_KEY}"
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
 
         contents = []
         for msg in messages:
@@ -490,28 +646,57 @@ def ai_assistant(user):
             "system_instruction": {
                 "parts": [{"text": system_prompt}]
             },
-            "contents": contents
+            "contents": contents,
+            "generationConfig": {"temperature": 0.4, "maxOutputTokens": 900},
         }
 
-        response = requests.post(url, json=payload, timeout=30)
+        response = requests.post(url, headers={"x-goog-api-key": GEMINI_API_KEY}, json=payload, timeout=(5, 45))
         if not response.ok:
-            return jsonify({'error': 'The AI provider did not complete the request.', 'status': 'provider_error'}), 502
-        result = response.json()
+            app.logger.warning("Gemini request rejected with HTTP %s", response.status_code)
+            if response.status_code in (401, 403):
+                message = 'Gemini rejected the configured API key or its permissions. Check GEMINI_API_KEY in backend/.env.'
+            elif response.status_code == 404:
+                message = f'The configured Gemini model ({GEMINI_MODEL}) is unavailable. Set GEMINI_MODEL to a model enabled for your API key.'
+            elif response.status_code == 429:
+                message = 'Gemini rate limit or quota was reached. Check the project quota and retry shortly.'
+            elif response.status_code >= 500:
+                message = 'Gemini is temporarily unavailable. Please retry shortly.'
+            else:
+                message = 'Gemini rejected the request. Check the model configuration and API project settings.'
+            return jsonify({'error': message, 'status': 'provider_error'}), 502
+        try:
+            result = response.json()
+        except ValueError:
+            app.logger.warning("Gemini returned a non-JSON response")
+            return jsonify({'error': 'Gemini returned an unreadable response. Please retry shortly.', 'status': 'provider_error'}), 502
 
-        if "candidates" in result:
-            reply = result["candidates"][0]["content"]["parts"][0]["text"]
+        candidates = result.get("candidates") or []
+        if candidates:
+            parts = candidates[0].get("content", {}).get("parts", [])
+            reply = "\n".join(part.get("text", "") for part in parts if part.get("text")).strip()
+            if not reply:
+                return jsonify({'error': 'Gemini could not produce a text answer for that question. Please rephrase and try again.', 'status': 'empty_response'}), 502
             latest_question = str(messages[-1].get('content', ''))[:2000]
             record = FarmRecord(owner_id=user.id, farm_id=selected_farm.id if selected_farm else None, kind='assistant-chat',
                                 payload=json.dumps({'question': latest_question, 'reply': reply[:8000]}, ensure_ascii=False))
             db.session.add(record)
             db.session.commit()
             return jsonify({"reply": reply})
-        else:
-            return jsonify({'error': 'The AI provider returned no response.', 'status': 'provider_error'}), 502
+        finish_reason = candidates[0].get("finishReason", "") if candidates else ""
+        if finish_reason == "SAFETY":
+            return jsonify({'error': 'The request was blocked by the provider safety filter. Please rephrase it as a farming question.', 'status': 'safety_block'}), 422
+        return jsonify({'error': 'Gemini returned no answer. Please rephrase and try again.', 'status': 'empty_response'}), 502
 
-    except Exception as e:
-        app.logger.exception('AI assistant request failed')
-        return jsonify({'error': 'The AI assistant request failed.', 'status': 'provider_error'}), 502
+    except requests.Timeout:
+        app.logger.warning('Gemini request timed out')
+        return jsonify({'error': 'Gemini took too long to respond. Please retry shortly.', 'status': 'provider_timeout'}), 504
+    except requests.RequestException as error:
+        # Do not log the request URL or exception text: provider URLs/headers can contain credentials.
+        app.logger.warning('Gemini connection failed (%s)', type(error).__name__)
+        return jsonify({'error': 'Cannot reach Gemini from the backend. Check outbound network access and retry.', 'status': 'provider_unreachable'}), 503
+    except Exception as error:
+        app.logger.error('AI assistant request failed (%s)', type(error).__name__)
+        return jsonify({'error': 'The AI assistant encountered an internal error. Please retry.', 'status': 'internal_error'}), 500
 
 # Get all listings
 @app.route('/api/listings', methods=['GET'])
