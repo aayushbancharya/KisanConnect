@@ -1,0 +1,8 @@
+Flask>=3.1,<4
+Flask-Bcrypt>=1.0.1,<2
+Flask-Cors>=6,<7
+Flask-SQLAlchemy>=3.1,<4
+gunicorn>=22,<24
+PyJWT>=2.8,<3
+python-dotenv>=1.0,<2
+requests>=2.31,<3
