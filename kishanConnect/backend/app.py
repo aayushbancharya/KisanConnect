@@ -749,16 +749,6 @@ def ai_assistant(user):
         response = requests.post(url, headers={"x-goog-api-key": GEMINI_API_KEY}, json=payload, timeout=(5, 45))
         if not response.ok:
             app.logger.warning("Gemini request rejected with HTTP %s", response.status_code)
-            if response.status_code in (401, 403):
-                message = 'Gemini rejected the configured API key or its permissions. Check GEMINI_API_KEY in backend/.env.'
-            elif response.status_code == 404:
-                message = f'The configured Gemini model ({GEMINI_MODEL}) is unavailable. Set GEMINI_MODEL to a model enabled for your API key.'
-            elif response.status_code == 429:
-                message = 'Gemini rate limit or quota was reached. Check the project quota and retry shortly.'
-            elif response.status_code >= 500:
-                message = 'Gemini is temporarily unavailable. Please retry shortly.'
-            else:
-                message = 'Gemini rejected the request. Check the model configuration and API project settings.'
             app.logger.warning("Gemini fallback enabled for HTTP %s", response.status_code)
             return offline_assistant_response(messages, 'provider_error', response.status_code)
         try:
